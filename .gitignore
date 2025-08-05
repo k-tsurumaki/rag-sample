@@ -11,3 +11,5 @@ wheels/
 
 .env
 .env.example
+
+chroma_db/

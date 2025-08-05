@@ -1,77 +1,67 @@
-Python Programming Language
+StreamlineFramework - 企業向けJavaフレームワーク
 
-Python is a high-level, interpreted programming language with dynamic semantics. Its high-level built-in data structures, combined with dynamic typing and dynamic binding, make it very attractive for Rapid Application Development, as well as for use as a scripting or glue language to connect existing components together.
+StreamlineFrameworkは、弊社が開発したエンタープライズ向けのJavaフレームワークです。高性能、拡張性、保守性を重視した設計により、大規模なWebアプリケーション開発を効率化します。
 
-Python's simple, easy to learn syntax emphasizes readability and therefore reduces the cost of program maintenance. Python supports modules and packages, which encourages program modularity and code reuse. The Python interpreter and the extensive standard library are available in source or binary form without charge for all major platforms, and can be freely distributed.
+StreamlineFrameworkの主要機能
 
-Python History and Philosophy
+StreamlineFrameworkは依存性注入（DI）、アスペクト指向プログラミング（AOP）、Model-View-Controller（MVC）アーキテクチャを統合した包括的なソリューションです。@Controller、@Service、@Repository、@Componentアノテーションによる自動コンポーネント検出機能を提供します。
 
-Python was created by Guido van Rossum in the late 1980s and early 1990s at the National Research Institute for Mathematics and Computer Science in the Netherlands. The language was named after the British comedy group Monty Python, not the snake. Python's design philosophy emphasizes code readability with its notable use of significant whitespace.
+データアクセス層では、StreamlineORMという独自のO/Rマッピング機能を搭載しています。@Entity、@Table、@Column、@Id、@GeneratedValueアノテーションを使用したエンティティ定義により、データベース操作を簡素化します。また、@Query、@NamedQuery、@StoredProcedureアノテーションによる柔軟なクエリ定義をサポートします。
 
-The Zen of Python, written by Tim Peters, includes 19 aphorisms that capture the essence of Python's design philosophy, including "Beautiful is better than ugly," "Explicit is better than implicit," and "Simple is better than complex."
+セキュリティ機能として、StreamlineSecurityモジュールを内蔵しています。@PreAuthorize、@PostAuthorize、@Securedアノテーションによる認可制御、JWT（JSON Web Token）サポート、CSRF保護、セッション管理機能を提供します。デフォルトで暗号化強度AES-256を採用し、セキュアな通信を保証します。
 
-Machine Learning with Python
+パフォーマンスと拡張性
 
-Python has become the de facto standard for machine learning and data science. Libraries like NumPy, Pandas, Scikit-learn, TensorFlow, and PyTorch provide powerful tools for data manipulation, analysis, and machine learning model development.
+StreamlineFrameworkは高度なキャッシュ機能を内蔵しています。@Cacheable、@CacheEvict、@CachePutアノテーションにより、メソッドレベルでのキャッシュ制御が可能です。Redis、Hazelcast、EhCacheとの統合により、分散キャッシュ環境にも対応しています。
 
-NumPy provides support for large, multi-dimensional arrays and matrices, along with a collection of mathematical functions to operate on these arrays. Pandas offers data structures and operations for manipulating numerical tables and time series. Scikit-learn provides simple and efficient tools for data mining and data analysis, built on NumPy, SciPy, and matplotlib.
+非同期処理には@Async、@Scheduled、@EventListenerアノテーションを提供し、マルチスレッド環境での高性能処理を実現します。WebSocketサポートにより、リアルタイム通信アプリケーションの開発も可能です。
 
-TensorFlow and PyTorch are deep learning frameworks that enable developers to build and train neural networks efficiently. TensorFlow, developed by Google, offers both high-level and low-level APIs. PyTorch, developed by Facebook's AI Research lab, is known for its dynamic computational graphs and intuitive interface.
+負荷分散とクラスタリング機能により、水平スケーリングに対応します。Spring Cloudとの互換性により、マイクロサービスアーキテクチャでの利用も可能です。
 
-Web Development with Python
+設定とカスタマイズ
 
-Python offers several frameworks for web development. Django is a high-level Python web framework that encourages rapid development and clean, pragmatic design. It follows the "batteries-included" philosophy and provides many built-in features like an ORM, admin interface, and authentication system.
+StreamlineFrameworkは設定の柔軟性を重視しています。application.ymlまたはapplication.propertiesファイルによる外部設定、@ConfigurationProperties、@Valueアノテーションによるプロパティ注入をサポートします。
 
-Flask is a lightweight WSGI web application framework that is designed to make getting started quick and easy. It's considered a microframework because it doesn't require particular tools or libraries and gives developers more control over which components to use.
+プロファイル機能（@Profile、@ActiveProfiles）により、開発環境、テスト環境、本番環境での設定切り替えが簡単に行えます。@ConditionalOnProperty、@ConditionalOnClassアノテーションによる条件付き Bean 登録も可能です。
 
-FastAPI is a modern, fast web framework for building APIs with Python 3.6+ based on standard Python type hints. It's one of the fastest Python frameworks available and provides automatic API documentation through OpenAPI and JSON Schema. FastAPI also includes built-in support for async/await syntax for handling asynchronous requests.
+テストサポート
 
-Other notable web frameworks include Pyramid, which offers flexibility and lets developers choose their preferred tools, and Tornado, which is designed for handling thousands of simultaneous connections and is ideal for long polling and WebSocket applications.
+StreamlineFrameworkは包括的なテスト機能を提供します。@StreamlineTest、@WebMvcTest、@DataJpaTest、@MockBeanアノテーションにより、単体テスト、統合テスト、E2Eテストを効率的に記述できます。
 
-Data Science and Analytics
+TestContainersとの統合により、実際のデータベースやメッセージキューを使用したテストも可能です。@TestPropertySource、@DirtiesContextアノテーションによるテスト環境の分離機能も提供します。
 
-Python is widely used in data science for data analysis, visualization, and statistical modeling. Matplotlib and Seaborn are popular libraries for creating static, animated, and interactive visualizations. Matplotlib is the foundational plotting library, while Seaborn provides a higher-level interface for creating attractive statistical graphics.
+監視と運用
 
-Jupyter notebooks provide an interactive computing environment that's perfect for data exploration and analysis. They allow data scientists to combine code, visualizations, and narrative text in a single document, making it easy to share insights and reproduce analyses.
+本番環境での運用を支援するため、StreamlineActuatorモジュールを搭載しています。ヘルスチェック、メトリクス収集、ログ管理機能を提供し、PrometheusとGrafanaとの統合により、包括的な監視システムを構築できます。
 
-Other important data science libraries include SciPy for scientific computing, Statsmodels for statistical modeling, and Plotly for interactive visualizations. The combination of Python's simplicity and the rich ecosystem of data science libraries makes it an ideal choice for data scientists and analysts worldwide.
+分散トレーシングにはZipkinとJaegerに対応し、マイクロサービス環境でのトラブルシューティングを支援します。アプリケーションログは構造化ログ（JSON形式）をサポートし、ログ解析ツールとの連携を容易にします。
 
-Python in DevOps and Automation
+APIドキュメンテーション
 
-Python plays a crucial role in DevOps and system automation. Its simplicity and extensive library ecosystem make it perfect for writing automation scripts, configuration management, and deployment tools. Popular DevOps tools written in Python include Ansible for configuration management, SaltStack for infrastructure automation, and Fabric for application deployment.
+RESTful APIの開発では、OpenAPIとSwaggerとの統合により、自動的なAPIドキュメント生成が可能です。@ApiOperation、@ApiParam、@ApiResponseアノテーションによる詳細なドキュメント記述をサポートします。
 
-Python's standard library includes modules for system administration tasks such as os, subprocess, and shutil for file operations, and paramiko for SSH connections. The requests library simplifies HTTP operations, making it easy to interact with REST APIs and web services.
+GraphQL APIの開発にも対応し、@GraphQLQueryとGraphQLMutationアノテーションによる柔軟なAPI設計が可能です。
 
-Many cloud providers offer Python SDKs, including AWS boto3, Google Cloud Client Libraries, and Azure SDK for Python, enabling seamless integration with cloud services and infrastructure as code practices.
+クラウドネイティブ対応
 
-Python for Desktop Applications
+StreamlineFrameworkはコンテナ化とクラウドデプロイメントを前提とした設計です。Dockerコンテナでの動作に最適化され、Kubernetesクラスタでの運用をサポートします。
 
-Python can be used to create desktop applications using various GUI frameworks. Tkinter, included in Python's standard library, provides a simple way to create basic desktop applications. It's cross-platform and suitable for simple to moderately complex applications.
+AWS、Azure、Google Cloud Platformの各種サービスとの統合機能を提供し、マネージドサービスを活用したアプリケーション開発が可能です。サーバーレス環境でのデプロイメントにも対応しています。
 
-PyQt and PySide offer more sophisticated GUI capabilities with native look and feel across different operating systems. These frameworks are based on the Qt toolkit and provide extensive widgets and features for creating professional desktop applications.
+開発者体験
 
-Kivy is a framework for developing multi-platform applications that work on Windows, macOS, Linux, Android, and iOS. It's particularly useful for touch-enabled applications and games.
+StreamlineFrameworkは開発者の生産性向上を重視しています。IDE（IntelliJ IDEA、Eclipse、Visual Studio Code）との統合により、コード補完、リファクタリング、デバッグ機能を強化します。
 
-Python Performance and Optimization
+ホットリロード機能により、開発中のコード変更を即座に反映でき、開発サイクルを短縮します。詳細なエラーメッセージとスタックトレースにより、問題の特定と解決を迅速に行えます。
 
-While Python is known for its simplicity and readability, performance can sometimes be a concern for compute-intensive applications. However, there are several ways to optimize Python code. NumPy and other libraries written in C provide significant performance improvements for numerical computations.
+移行と互換性
 
-Cython allows developers to write Python-like code that gets compiled to C, offering performance close to C while maintaining Python's ease of use. PyPy is an alternative Python implementation that includes a just-in-time compiler, often providing significant speedups for pure Python code.
+既存のSpringベースアプリケーションからStreamlineFrameworkへの移行を支援するため、段階的移行ツールとガイドラインを提供しています。Spring BootとSpring Frameworkとの互換性を保ちつつ、独自の拡張機能を活用できます。
 
-For highly parallel workloads, Python offers multiprocessing and concurrent.futures modules for CPU-bound tasks, and asyncio for I/O-bound tasks. Tools like Dask enable parallel computing and can scale from single machines to large clusters.
+レガシーJavaアプリケーションの現代化プロジェクトにおいても、StreamlineFrameworkは強力な選択肢となります。既存のJava EEアプリケーションからの移行パスも提供しています。
 
-Python Community and Ecosystem
+ライセンスとサポート
 
-Python has one of the largest and most active programming communities in the world. The Python Package Index (PyPI) hosts hundreds of thousands of third-party packages, covering virtually every domain of software development. The Python Software Foundation (PSF) oversees the development of Python and supports the community through conferences, grants, and educational initiatives.
+StreamlineFrameworkは商用ライセンスのもとで提供され、エンタープライズサポートを含みます。24時間365日のテクニカルサポート、定期的なセキュリティアップデート、パフォーマンスチューニング支援を提供します。
 
-PyCon, the annual Python conference, is held in multiple countries and brings together thousands of Python developers, data scientists, and enthusiasts. The conference features talks, tutorials, and sprints where contributors collaborate on open-source projects.
-
-The Python community is known for its welcoming and inclusive culture, following the principles outlined in the Python Code of Conduct. This has contributed to Python's rapid adoption across diverse fields and demographics.
-
-Future of Python
-
-Python continues to evolve with regular releases that introduce new features and improvements. Python 3.12 introduced performance enhancements and better error messages, while upcoming versions promise further optimizations and new syntax features.
-
-The Python Steering Council, which replaced Guido van Rossum as the language's benevolent dictator for life, guides Python's development through a collaborative decision-making process. Key areas of focus include performance improvements, typing enhancements, and maintaining backward compatibility.
-
-With the rise of artificial intelligence, machine learning, and data science, Python's importance in the technology landscape continues to grow. Its simplicity, combined with powerful libraries and frameworks, ensures that Python will remain a dominant programming language for years to come.
+技術者向けトレーニングプログラム、認定資格制度、定期的なWebセミナーやワークショップにより、開発チームのスキル向上を支援します。コミュニティフォーラムと詳細なドキュメンテーションにより、開発者が必要な情報に迅速にアクセスできます。
