@@ -34,8 +34,35 @@ python main.py
 # 拡張RAG（新機能）
 python enhanced_rag.py
 
+# LangExtract単体テスト（Ollama）
+python langextract_ollama.py
+
+# LangExtract単体テスト（Gemini）
+python langextract_gemini.py
+
+# 構造化RAG（JSON出力対応）
+python langextract_sample2.py
+
 # 比較デモ
 python comparison_demo.py
+```
+
+### API設定
+
+#### Gemini APIを使用する場合
+1. [Google AI Studio](https://makersuite.google.com/app/apikey)でAPIキーを取得
+2. `.env`ファイルに追加:
+   ```
+   GEMINI_API_KEY=your_gemini_api_key_here
+   GEMINI_MODEL=gemini-1.5-flash
+   ```
+
+#### Ollamaを使用する場合
+```bash
+# Ollamaのインストールと起動
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama serve
+ollama pull mistral
 ```
 
 ## 機能比較表
