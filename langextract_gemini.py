@@ -50,7 +50,7 @@ try:
         text_or_documents=input_text,
         prompt_description=prompt,
         examples=examples,
-        model_id="gemini-2.5-flash",
+        model_id=os.getenv("GEMINI_MODEL"),
         api_key=os.getenv("GEMINI_API_KEY"),  # Only use this for testing/development
     )
 
