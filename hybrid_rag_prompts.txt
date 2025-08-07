@@ -16,39 +16,32 @@
 
 回答:
 
-## KEYWORD_EXTRACTION_PROMPT
-以下の回答テキストから、StreamlineFrameworkに関連する重要なキーワードを抽出してください。
-
-回答テキスト:
-{answer_text}
-
-抽出する対象:
-1. アノテーション名（@Controller、@Service など）
-2. 機能名・モジュール名（StreamlineORM、StreamlineSecurity など）
-3. 技術用語（依存性注入、AOP、MVC など）
-4. 設定ファイル名（application.yml など）
-5. ライブラリ・フレームワーク名
-6. 数値・統計（バージョン番号、性能指標など）
-
-抽出されたキーワードをカンマ区切りで出力してください。例：
-@Controller, StreamlineORM, 依存性注入, application.yml
-
-キーワード:
-
 ## LANGEXTRACT_SOURCE_PROMPT
-以下の参考資料から、指定されたキーワードに関連する具体的な記述を抽出してください。
+以下のRAG参考資料から、重要なフレーズを抽出してください。
 
-重要な注意事項：
-- 提供された参考資料以外の情報は一切抽出しないでください
-- 推測や補完は行わないでください
-- キーワードが実際に言及されている箇所のみを抽出してください
+RAG参考資料:
+{retrieved_context}
+
+抽出対象:
+参考資料に含まれる具体的で重要なフレーズのみを抽出し、以下のカテゴリに分類してください。
 
 抽出対象カテゴリ:
-1. annotation_name - アノテーション名とその説明
-2. feature_name - 機能名とその詳細
-3. technical_term - 技術用語とその定義
-4. configuration - 設定に関する記述
-5. performance_metric - 性能や統計に関する数値
-6. module_name - モジュール名とその機能
+1. annotation_name - アノテーション名（@Controller、@Service など）
+2. feature_name - 機能名やモジュール名（Java, Spring, StreamlineORM、StreamlineSecurity など）  
+3. technical_term - 技術用語とその詳細（依存性注入、AOP、MVC アーキテクチャ など）
+4. configuration - 設定ファイル名や設定項目（application.yml、暗号化強度 など）
+5. performance_metric - 性能や統計に関する数値情報（30%向上、AES-256 など）
+6. architecture_pattern - アーキテクチャパターンや設計概念（マイクロサービス、分散キャッシュ など）
+7. integration_name - 統合・連携技術名（Redis、Spring Cloud、Docker など）
 
-参考資料にないキーワードは絶対に抽出してはいけません。
+抽出基準:
+- 技術仕様の核心となる具体的な名称や数値を含むフレーズ
+- 技術的な詳細を示す重要な用語
+- フレームワークの機能や特徴を示す情報を含むフレーズ
+- 文脈なしに意味が通らないフレーズは除外
+
+重要な注意事項：
+- RAG参考資料に実際に含まれているフレーズのみを抽出してください
+- 推測や補完は絶対に行わないでください  
+- 抽出したフレーズの出現位置を正確に特定してください
+- 同じ意味でも表現が異なる場合は、参考資料の実際の表現を使用してください

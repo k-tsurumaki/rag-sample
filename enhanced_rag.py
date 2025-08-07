@@ -2,7 +2,6 @@
 """
 StreamlineFramework ハイブリッドRAGシステム
 - 通常のRAG回答生成
-- キーワード抽出
 - LangExtractによるソース位置特定
 """
 
@@ -21,8 +20,8 @@ from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 環境変数を読み込み
@@ -34,14 +33,69 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 @dataclass
+class SystemConfig:
+    """システム設定"""
+
+    # ファイルパス
+    prompt_file: str = "hybrid_rag_prompts.txt"
+    document_file: str = "sample_documents.txt"
+    chroma_persist_directory: str = "./chroma_db"
+
+    # Ollama設定
+    ollama_model: str = "mistral"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_temperature: float = 0.3
+    ollama_num_predict: int = 512
+
+    # Gemini設定
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_temperature: float = 0.1
+    gemini_top_p: float = 0.8
+    gemini_top_k: int = 40
+    gemini_max_output_tokens: int = 2048
+
+    # LangExtract設定
+    langextract_extraction_passes: int = 1
+    langextract_max_workers: int = 1
+    langextract_max_char_buffer: int = 800
+
+    # RAG設定
+    text_splitter_chunk_size: int = 2000
+    text_splitter_chunk_overlap: int = 400
+    retriever_k: int = 3
+    retriever_fetch_k: int = 6
+    retriever_lambda_mult: float = 0.7
+
+    # 埋め込みモデル設定
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_device: str = "cpu"
+
+    # デバッグ設定
+    debug: bool = False
+
+    @classmethod
+    def from_env(cls) -> "SystemConfig":
+        """環境変数から設定を生成"""
+        return cls(
+            chroma_persist_directory=os.getenv(
+                "CHROMA_PERSIST_DIRECTORY", cls.chroma_persist_directory
+            ),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", cls.ollama_base_url),
+            ollama_model=os.getenv("OLLAMA_MODEL", cls.ollama_model),
+            gemini_model=os.getenv("GEMINI_MODEL", cls.gemini_model),
+            debug=os.getenv("DEBUG", "false").lower() == "true",
+        )
+
+
+@dataclass
 class SourceLocation:
     """ソース位置情報"""
 
-    text: str  # 引用されたテキスト
     start_char: int  # 開始文字位置
     end_char: int  # 終了文字位置
-    keyword: str  # 対応するキーワード
+    keyword: str  # LangExtractで抽出されたテキスト
     category: str  # 抽出カテゴリ
+    section: int  # セクション番号
 
 
 @dataclass
@@ -50,7 +104,9 @@ class HybridRAGResult:
 
     question: str  # 元の質問
     answer: str  # RAG回答
-    extracted_keywords: List[str]  # 抽出されたキーワード
+    extracted_keywords: List[
+        str
+    ]  # LangExtractで抽出されたテキスト（後方互換性のため保持）
     source_locations: List[SourceLocation]  # ソース位置情報
     metadata: Dict[str, Any]  # メタデータ
 
@@ -62,316 +118,640 @@ class HybridRAGResult:
 class PromptLoader:
     """プロンプトテンプレートローダー"""
 
-    def __init__(self, prompt_file: str = "hybrid_rag_prompts.txt"):
-        self.prompt_file = prompt_file
+    def __init__(self, config: SystemConfig):
+        self.config = config
         self.prompts = self._load_prompts()
 
     def _load_prompts(self) -> Dict[str, str]:
         """プロンプトファイルから各プロンプトを読み込み"""
         try:
-            with open(self.prompt_file, "r", encoding="utf-8") as f:
+            with open(self.config.prompt_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            prompts = {}
-            current_prompt = None
-            current_content = []
+            return self._parse_prompts(content)
 
-            for line in content.split("\n"):
-                if line.startswith("## ") and line.endswith("_PROMPT"):
-                    if current_prompt:
-                        prompts[current_prompt] = "\n".join(current_content).strip()
-                    current_prompt = line[3:]  # "## " を除去
-                    current_content = []
-                elif current_prompt and not line.startswith("#"):
-                    current_content.append(line)
-
-            # 最後のプロンプトを追加
-            if current_prompt:
-                prompts[current_prompt] = "\n".join(current_content).strip()
-
-            return prompts
-
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             raise FileNotFoundError(
-                f"プロンプトファイル '{self.prompt_file}' が見つかりません"
-            )
+                f"プロンプトファイル '{self.config.prompt_file}' が見つかりません"
+            ) from e
         except Exception as e:
-            raise Exception(f"プロンプトファイルの読み込みエラー: {e}")
+            raise Exception(f"プロンプトファイルの読み込みエラー: {e}") from e
+
+    def _parse_prompts(self, content: str) -> Dict[str, str]:
+        """プロンプト内容を解析"""
+        prompts = {}
+        current_prompt = None
+        current_content = []
+
+        for line in content.split("\n"):
+            if line.startswith("## ") and line.endswith("_PROMPT"):
+                if current_prompt:
+                    prompts[current_prompt] = "\n".join(current_content).strip()
+                current_prompt = line[3:]  # "## " を除去
+                current_content = []
+            elif current_prompt and not line.startswith("#"):
+                current_content.append(line)
+
+        # 最後のプロンプトを追加
+        if current_prompt:
+            prompts[current_prompt] = "\n".join(current_content).strip()
+
+        return prompts
 
     def get_prompt(self, prompt_name: str) -> str:
         """指定されたプロンプトを取得"""
         if prompt_name not in self.prompts:
-            raise KeyError(f"プロンプト '{prompt_name}' が見つかりません")
+            available_prompts = list(self.prompts.keys())
+            raise KeyError(
+                f"プロンプト '{prompt_name}' が見つかりません。"
+                f"利用可能なプロンプト: {available_prompts}"
+            )
         return self.prompts[prompt_name]
 
 
 class DocumentLoader:
     """参考資料ローダー（LangChain対応）"""
 
-    def __init__(self, document_file: str = "sample_documents.txt"):
-        self.document_file = document_file
+    def __init__(self, config: SystemConfig):
+        self.config = config
 
     def load_documents(self) -> str:
         """参考資料を文字列として読み込み（従来互換）"""
         try:
-            with open(self.document_file, "r", encoding="utf-8") as f:
+            with open(self.config.document_file, "r", encoding="utf-8") as f:
                 return f.read()
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             raise FileNotFoundError(
-                f"参考資料ファイル '{self.document_file}' が見つかりません"
-            )
+                f"参考資料ファイル '{self.config.document_file}' が見つかりません"
+            ) from e
         except Exception as e:
-            raise Exception(f"参考資料の読み込みエラー: {e}")
+            raise Exception(f"参考資料の読み込みエラー: {e}") from e
 
     def load_documents_as_langchain(self) -> List[Document]:
         """LangChain Document形式で読み込み"""
         try:
-            with open(self.document_file, "r", encoding="utf-8") as f:
-                content = f.read()
+            content = self.load_documents()
+            return self._create_langchain_documents(content)
+        except Exception as e:
+            raise Exception(f"LangChain文書作成エラー: {e}") from e
 
-            # テキストをセクションに分割
-            sections = content.split("\n\n")
-            documents = []
+    def _create_langchain_documents(self, content: str) -> List[Document]:
+        """テキストをLangChain Documentに変換"""
+        # 空行2つ以上で区切られたセクションを取得
+        sections = content.split("\n\n")
+        documents = []
 
-            for i, section in enumerate(sections):
-                if section.strip():
+        current_section = 0
+        accumulated_content = ""
+
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
+
+            # セクションタイトル（短い行）かコンテンツかを判定
+            if (
+                len(section) < 100
+                and not section.endswith(".")
+                and not section.endswith("。")
+            ):
+                # 新しいセクションタイトルの場合、前のセクションがあれば保存
+                if accumulated_content:
                     doc = Document(
-                        page_content=section.strip(),
+                        page_content=accumulated_content.strip(),
                         metadata={
-                            "source": self.document_file,
-                            "section": i,
+                            "source": self.config.document_file,
+                            "section": current_section,
                             "section_type": "framework_documentation",
                         },
                     )
                     documents.append(doc)
 
-            return documents
+                # 新しいセクションを開始
+                current_section += 1
+                accumulated_content = section + "\n\n"
+            else:
+                # コンテンツを蓄積
+                accumulated_content += section + "\n\n"
 
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"参考資料ファイル '{self.document_file}' が見つかりません"
+        # 最後のセクションを追加
+        if accumulated_content:
+            doc = Document(
+                page_content=accumulated_content.strip(),
+                metadata={
+                    "source": self.config.document_file,
+                    "section": current_section,
+                    "section_type": "framework_documentation",
+                },
             )
-        except Exception as e:
-            raise Exception(f"参考資料の読み込みエラー: {e}")
+            documents.append(doc)
+
+        print(f"作成された文書数: {len(documents)}")
+        print("\n=== 全参考資料の内容 ===")
+        for i, doc in enumerate(documents):
+            print(f"\n--- 文書 {i} (セクション {doc.metadata['section']}) ---")
+            print(f"長さ: {len(doc.page_content)} 文字")
+            print(f"内容:\n{doc.page_content}")
+            print("-" * 80)
+
+        return documents
 
 
 class GeminiClient:
-    """Gemini API クライアント（LangChain対応）"""
+    """Gemini API クライアント（LangExtract専用）"""
 
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
-            raise ValueError("GEMINI_API_KEY環境変数が設定されていません")
+    def __init__(self, config: SystemConfig):
+        self.config = config
+        self.api_key = self._get_api_key()
+        self.model = self._initialize_model()
 
-        self.model_name = model_name
-
-        # 直接のGemini APIクライアント（LangExtract用）
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(model_name)
-
-        # LangChain用のLLM（Geminiの直接実装）
-        self.langchain_llm = self._create_langchain_llm()
-
-    def _create_langchain_llm(self):
-        """LangChain用のLLMを作成（Gemini直接実装）"""
-        try:
-            return ChatGoogleGenerativeAI(
-                model=self.model_name,
-                google_api_key=self.api_key,
-                temperature=0.1,
-                max_output_tokens=2048,
+    def _get_api_key(self) -> str:
+        """API キーを取得"""
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "GEMINI_API_KEY環境変数が設定されていません。"
+                "https://aistudio.google.com/app/apikey からAPIキーを取得してください。"
             )
-        except ImportError:
-            # langchain_google_genaiが利用できない場合のフォールバック
-            return None
+        return api_key
+
+    def _initialize_model(self) -> genai.GenerativeModel:
+        """Gemini モデルを初期化"""
+        genai.configure(api_key=self.api_key)
+        return genai.GenerativeModel(self.config.gemini_model)
+
+    @property
+    def model_name(self) -> str:
+        """モデル名を取得"""
+        return self.config.gemini_model
 
     def generate_response(self, prompt: str) -> str:
-        """Geminiで応答を生成（直接API）"""
+        """Geminiで応答を生成（LangExtract用のみ）"""
         try:
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    top_p=0.8,
-                    top_k=40,
-                    max_output_tokens=2048,
+                    temperature=self.config.gemini_temperature,
+                    top_p=self.config.gemini_top_p,
+                    top_k=self.config.gemini_top_k,
+                    max_output_tokens=self.config.gemini_max_output_tokens,
                 ),
             )
             return response.text
         except Exception as e:
-            raise Exception(f"Gemini API エラー: {e}")
+            raise Exception(f"Gemini API エラー: {e}") from e
 
-    def get_langchain_llm(self):
+
+class OllamaClient:
+    """Ollama クライアント（RAG用）"""
+
+    def __init__(self, config: SystemConfig):
+        self.config = config
+        self.llm = self._initialize_llm()
+        print(f"✓ Ollamaモデル初期化: {self.config.ollama_model}")
+
+    def _initialize_llm(self) -> OllamaLLM:
+        """Ollama LLMを初期化"""
+        return OllamaLLM(
+            model=self.config.ollama_model,
+            base_url=self.config.ollama_base_url,
+            temperature=self.config.ollama_temperature,
+            num_predict=self.config.ollama_num_predict,
+        )
+
+    @property
+    def model_name(self) -> str:
+        """モデル名を取得"""
+        return self.config.ollama_model
+
+    def generate_response(self, prompt: str) -> str:
+        """Ollamaで応答を生成"""
+        try:
+            return self.llm.invoke(prompt)
+        except Exception as e:
+            raise Exception(f"Ollama API エラー: {e}") from e
+
+    def get_langchain_llm(self) -> OllamaLLM:
         """LangChain用のLLMを取得"""
-        if self.langchain_llm is None:
-            # フォールバック実装: 簡単なラッパー
-            class GeminiWrapper:
-                def __init__(self, gemini_client):
-                    self.gemini_client = gemini_client
-
-                def __call__(self, prompt):
-                    return self.gemini_client.generate_response(prompt)
-
-                def invoke(self, prompt):
-                    if hasattr(prompt, "to_string"):
-                        prompt_str = prompt.to_string()
-                    else:
-                        prompt_str = str(prompt)
-                    return self.gemini_client.generate_response(prompt_str)
-
-            return GeminiWrapper(self)
-        return self.langchain_llm
+        return self.llm
 
 
 class LangExtractClient:
     """LangExtract クライアント"""
 
-    def __init__(self, gemini_client: GeminiClient):
+    def __init__(self, config: SystemConfig, gemini_client: GeminiClient):
+        self.config = config
         self.gemini_client = gemini_client
         self.examples = self._create_examples()
 
-    def _create_examples(self):
-        """LangExtract用の例を作成"""
+    def _create_examples(self) -> List[lx.data.ExampleData]:
+        """LangExtract用の例を作成（RAG参考資料から重要フレーズを抽出）"""
         return [
             lx.data.ExampleData(
-                text="StreamlineFrameworkの@Controllerアノテーションは、Webコントローラクラスを定義するために使用されます。パフォーマンスは従来比30%向上しています。",
-                extractions=[
-                    lx.data.Extraction(
-                        extraction_class="annotation_name",
-                        extraction_text="@Controller",
-                        attributes={
-                            "category": "アノテーション",
-                            "purpose": "Webコントローラ定義",
-                        },
-                    ),
-                    lx.data.Extraction(
-                        extraction_class="performance_metric",
-                        extraction_text="30%向上",
-                        attributes={
-                            "category": "性能指標",
-                            "metric_type": "パフォーマンス改善",
-                        },
-                    ),
-                ],
-            )
+                text="[セクション 1]\nStreamlineFrameworkは、エンタープライズ向けのJavaフレームワークです。依存性注入（DI）、アスペクト指向プログラミング（AOP）、Model-View-Controller（MVC）アーキテクチャを統合的にサポートしています。\n\n[セクション 2]\n@Controller、@Service、@Repository、@Componentアノテーションによる自動コンポーネント検出機能を提供し、大規模なWebアプリケーション開発を効率化します。",
+                extractions=self._create_example_extractions_1(),
+            ),
+            lx.data.ExampleData(
+                text="[セクション 3]\nデータアクセス層では、StreamlineORMが独自のO/Rマッピング機能を提供します。@Entity、@Table、@Column、@Id、@GeneratedValueアノテーションを使用してエンティティクラスを定義できます。\n\n[セクション 4]\nStreamlineORMは従来のORMツールと比較して30%のパフォーマンス向上を実現しており、大規模なデータベース操作においても高い処理速度を維持します。",
+                extractions=self._create_example_extractions_2(),
+            ),
         ]
 
-    def extract_keyword_sources(
-        self, context: str, keywords: List[str], prompt: str
+    def _create_example_extractions_1(self) -> List[lx.data.Extraction]:
+        """セクション1の例抽出を作成（RAG参考資料からの重要フレーズ抽出）"""
+        return [
+            lx.data.Extraction(
+                extraction_class="feature_name",
+                extraction_text="エンタープライズ向けのJavaフレームワーク",
+                char_interval=lx.data.CharInterval(start_pos=35, end_pos=58),
+                attributes={
+                    "category": "フレームワーク特徴",
+                    "importance": "high",
+                    "context": "StreamlineFrameworkの基本概要",
+                    "section": "1",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="technical_term",
+                extraction_text="依存性注入（DI）",
+                char_interval=lx.data.CharInterval(start_pos=62, end_pos=73),
+                attributes={
+                    "category": "技術用語",
+                    "importance": "high",
+                    "context": "アーキテクチャの特徴",
+                    "section": "1",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="technical_term",
+                extraction_text="アスペクト指向プログラミング（AOP）",
+                char_interval=lx.data.CharInterval(start_pos=75, end_pos=97),
+                attributes={
+                    "category": "技術用語",
+                    "importance": "high",
+                    "context": "プログラミングパラダイム",
+                    "section": "1",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="architecture_pattern",
+                extraction_text="Model-View-Controller（MVC）",
+                char_interval=lx.data.CharInterval(start_pos=99, end_pos=122),
+                attributes={
+                    "category": "アーキテクチャパターン",
+                    "importance": "high",
+                    "context": "アーキテクチャ設計",
+                    "section": "1",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Controller",
+                char_interval=lx.data.CharInterval(start_pos=154, end_pos=165),
+                attributes={
+                    "category": "アノテーション",
+                    "purpose": "Webコントローラ定義",
+                    "importance": "high",
+                    "section": "2",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Service",
+                char_interval=lx.data.CharInterval(start_pos=167, end_pos=175),
+                attributes={
+                    "category": "アノテーション",
+                    "purpose": "サービス層定義",
+                    "importance": "high",
+                    "section": "2",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Repository",
+                char_interval=lx.data.CharInterval(start_pos=177, end_pos=188),
+                attributes={
+                    "category": "アノテーション",
+                    "purpose": "データアクセス層定義",
+                    "importance": "high",
+                    "section": "2",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Component",
+                char_interval=lx.data.CharInterval(start_pos=190, end_pos=200),
+                attributes={
+                    "category": "アノテーション",
+                    "purpose": "汎用コンポーネント定義",
+                    "importance": "high",
+                    "section": "2",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="feature_name",
+                extraction_text="自動コンポーネント検出機能",
+                char_interval=lx.data.CharInterval(start_pos=211, end_pos=224),
+                attributes={
+                    "category": "機能名",
+                    "importance": "medium",
+                    "context": "アノテーション機能",
+                    "section": "2",
+                },
+            ),
+        ]
+
+    def _create_example_extractions_2(self) -> List[lx.data.Extraction]:
+        """セクション2の例抽出を作成（RAG参考資料からの重要フレーズ抽出）"""
+        return [
+            lx.data.Extraction(
+                extraction_class="feature_name",
+                extraction_text="StreamlineORM",
+                char_interval=lx.data.CharInterval(start_pos=23, end_pos=36),
+                attributes={
+                    "category": "フレームワークコンポーネント",
+                    "component_type": "O/Rマッピング",
+                    "importance": "high",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="feature_name",
+                extraction_text="O/Rマッピング機能",
+                char_interval=lx.data.CharInterval(start_pos=39, end_pos=50),
+                attributes={
+                    "category": "機能名",
+                    "importance": "medium",
+                    "context": "データアクセス層",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Entity",
+                char_interval=lx.data.CharInterval(start_pos=56, end_pos=63),
+                attributes={
+                    "category": "ORMアノテーション",
+                    "purpose": "エンティティクラス定義",
+                    "importance": "high",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Table",
+                char_interval=lx.data.CharInterval(start_pos=65, end_pos=71),
+                attributes={
+                    "category": "ORMアノテーション",
+                    "purpose": "テーブルマッピング",
+                    "importance": "medium",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Column",
+                char_interval=lx.data.CharInterval(start_pos=73, end_pos=80),
+                attributes={
+                    "category": "ORMアノテーション",
+                    "purpose": "カラムマッピング",
+                    "importance": "medium",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@Id",
+                char_interval=lx.data.CharInterval(start_pos=82, end_pos=85),
+                attributes={
+                    "category": "ORMアノテーション",
+                    "purpose": "主キー指定",
+                    "importance": "high",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="annotation_name",
+                extraction_text="@GeneratedValue",
+                char_interval=lx.data.CharInterval(start_pos=87, end_pos=102),
+                attributes={
+                    "category": "ORMアノテーション",
+                    "purpose": "主キー自動生成",
+                    "importance": "medium",
+                    "section": "3",
+                },
+            ),
+            lx.data.Extraction(
+                extraction_class="performance_metric",
+                extraction_text="30%のパフォーマンス向上",
+                char_interval=lx.data.CharInterval(start_pos=180, end_pos=194),
+                attributes={
+                    "category": "性能指標",
+                    "metric_type": "パフォーマンス改善",
+                    "importance": "high",
+                    "section": "4",
+                },
+            ),
+        ]
+
+    def extract_sources(
+        self, retrieved_context: str, prompt: str
     ) -> List[SourceLocation]:
-        """キーワードのソース位置を抽出"""
+        """RAG参考資料からソース位置を抽出"""
         try:
+            print("LangExtractでソース抽出開始")
             print(
-                f"LangExtractでキーワードソース抽出開始: {len(keywords)}個のキーワード"
+                f"処理対象RAG参考資料: {retrieved_context[:100]}..."
+            )  # 最初の100文字を表示
+
+            result = self._perform_extraction(retrieved_context, prompt)
+            source_locations = self._process_extraction_results(
+                result.extractions, retrieved_context
             )
-
-            # キーワードを含めたプロンプトを作成
-            full_prompt = f"{prompt}\n\n対象キーワード: {', '.join(keywords)}"
-
-            result = lx.extract(
-                text_or_documents=context,
-                prompt_description=full_prompt,
-                examples=self.examples,
-                extraction_passes=1,
-                max_workers=1,
-                max_char_buffer=800,
-                model_id=self.gemini_client.model_name,
-                api_key=self.gemini_client.api_key,
-                temperature=0.1,
-            )
-
-            source_locations = []
-            for extraction in result.extractions:
-                source_location = SourceLocation(
-                    text=extraction.extraction_text,
-                    start_char=getattr(extraction, "start_char", 0),
-                    end_char=getattr(
-                        extraction, "end_char", len(extraction.extraction_text)
-                    ),
-                    keyword=self._find_matching_keyword(
-                        extraction.extraction_text, keywords
-                    ),
-                    category=extraction.extraction_class,
-                )
-                source_locations.append(source_location)
 
             print(f"LangExtract抽出完了: {len(source_locations)}件のソース位置")
             return source_locations
 
         except Exception as e:
-            raise Exception(f"LangExtract抽出エラー: {e}")
+            raise Exception(f"LangExtract抽出エラー: {e}") from e
 
-    def _find_matching_keyword(self, extracted_text: str, keywords: List[str]) -> str:
-        """抽出されたテキストに最も関連するキーワードを特定"""
-        for keyword in keywords:
-            if (
-                keyword.lower() in extracted_text.lower()
-                or extracted_text.lower() in keyword.lower()
-            ):
-                return keyword
-        return "関連キーワード不明"
+    def _perform_extraction(self, retrieved_context: str, prompt: str):
+        """LangExtract抽出を実行"""
+        # プロンプトのプレースホルダーを置換
+        formatted_prompt = prompt.replace("{retrieved_context}", retrieved_context)
+
+        return lx.extract(
+            text_or_documents=retrieved_context,
+            prompt_description=formatted_prompt,
+            examples=self.examples,
+            extraction_passes=self.config.langextract_extraction_passes,
+            max_workers=self.config.langextract_max_workers,
+            max_char_buffer=self.config.langextract_max_char_buffer,
+            model_id=self.gemini_client.model_name,
+            api_key=self.gemini_client.api_key,
+            temperature=self.config.gemini_temperature,
+        )
+
+    def _process_extraction_results(
+        self, extractions: List[lx.data.Extraction], context: str
+    ) -> List[SourceLocation]:
+        """抽出結果を処理してSourceLocationリストを作成"""
+        source_locations = []
+
+        for extraction in extractions:
+            section_num = self._extract_section_number(
+                context, extraction.extraction_text
+            )
+            if section_num is None:
+                section_num = getattr(extraction, "attributes", {}).get(
+                    "document_section", 0
+                )
+
+            source_location = SourceLocation(
+                start_char=getattr(extraction.char_interval, "start_pos", 0),
+                end_char=getattr(
+                    extraction.char_interval,
+                    "end_pos",
+                    len(extraction.extraction_text),
+                ),
+                keyword=extraction.extraction_text,
+                category=extraction.extraction_class,
+                section=section_num,
+            )
+            source_locations.append(source_location)
+
+        return source_locations
+
+    def _extract_section_number(
+        self, retrieved_context: str, extracted_text: str
+    ) -> int:
+        """RAG参考資料から該当するセクション番号を特定"""
+        # セクション形式の参考資料からセクション番号を抽出
+        lines = retrieved_context.split("\n")
+        current_section = 0
+        text_position = retrieved_context.find(extracted_text)
+
+        if text_position == -1:
+            return current_section
+
+        # 抽出されたテキストの位置までの行を確認してセクション番号を特定
+        char_count = 0
+        for line in lines:
+            if char_count <= text_position < char_count + len(line):
+                break
+            char_count += len(line) + 1  # +1 for newline
+            if line.startswith("[セクション ") and line.endswith("]"):
+                try:
+                    current_section = int(line.split(" ")[1].rstrip("]"))
+                except (IndexError, ValueError):
+                    pass
+
+        return current_section
 
 
 class LangChainRAGEngine:
-    """LangChainベースのRAGエンジン"""
+    """LangChainベースのRAGエンジン（Ollama使用）"""
 
-    def __init__(self, gemini_client: GeminiClient):
-        self.gemini_client = gemini_client
+    def __init__(self, config: SystemConfig, ollama_client: OllamaClient):
+        self.config = config
+        self.ollama_client = ollama_client
         self.vectorstore = None
         self.qa_chain = None
 
-    def setup_vectorstore(self, documents: List[Document]):
+    def setup_vectorstore(self, documents: List[Document]) -> None:
         """ベクトルストアを設定"""
         try:
-            # テキストスプリッターでドキュメントを分割
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
-                length_function=len,
-            )
+            # 既存のChromaDBディレクトリをクリア（デバッグ用）
+            import shutil
 
-            splits = text_splitter.split_documents(documents)
+            if os.path.exists(self.config.chroma_persist_directory):
+                print(f"既存のChromaDBを削除中: {self.config.chroma_persist_directory}")
+                shutil.rmtree(self.config.chroma_persist_directory)
 
-            # 埋め込みモデルを初期化
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={"device": "cpu"},
-            )
-
-            # Chromaベクトルストアを作成
-            persist_directory = os.getenv("CHROMA_PERSIST_DIRECTORY", "./chroma_db")
-            self.vectorstore = Chroma.from_documents(
-                documents=splits,
-                embedding=embeddings,
-                persist_directory=persist_directory,
-            )
+            splits = self._split_documents(documents)
+            embeddings = self._create_embeddings()
+            self.vectorstore = self._create_vectorstore(splits, embeddings)
 
             print(f"✓ ベクトルストア作成完了: {len(splits)}個のチャンク")
 
         except Exception as e:
-            raise Exception(f"ベクトルストア設定エラー: {e}")
+            raise Exception(f"ベクトルストア設定エラー: {e}") from e
 
-    def setup_qa_chain(self, prompt_template: str):
+    def _split_documents(self, documents: List[Document]) -> List[Document]:
+        """ドキュメントを分割"""
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.config.text_splitter_chunk_size,
+            chunk_overlap=self.config.text_splitter_chunk_overlap,
+            length_function=len,
+        )
+        splits = text_splitter.split_documents(documents)
+
+        print(f"\n=== 元文書数: {len(documents)} → 分割後チャンク数: {len(splits)} ===")
+        print("\n=== 全チャンクの内容 ===")
+        for i, split in enumerate(splits):
+            print(f"\n--- チャンク {i} ---")
+            print(f"元セクション: {split.metadata.get('section', 'Unknown')}")
+            print(f"長さ: {len(split.page_content)} 文字")
+            print(f"内容:\n{split.page_content}")
+            print(f"完全なメタデータ: {split.metadata}")
+            print("-" * 60)
+
+        # ベクトルストア作成前にチャンクの検証
+        print("\n=== チャンクの検証 ===")
+        for i, split in enumerate(splits):
+            if len(split.page_content.strip()) < 10:
+                print(f"⚠️ チャンク {i} の内容が短すぎます: '{split.page_content}'")
+            if "キャッシュ" in split.page_content:
+                print(f"✓ チャンク {i} にキャッシュ関連の内容が含まれています")
+
+        return splits
+
+    def _create_embeddings(self) -> HuggingFaceEmbeddings:
+        """埋め込みモデルを作成"""
+        return HuggingFaceEmbeddings(
+            model_name=self.config.embedding_model,
+            model_kwargs={"device": self.config.embedding_device},
+        )
+
+    def _create_vectorstore(
+        self, splits: List[Document], embeddings: HuggingFaceEmbeddings
+    ) -> Chroma:
+        """Chromaベクトルストアを作成"""
+        print("\n=== ベクトルストア作成前の最終確認 ===")
+        for i, split in enumerate(splits[:3]):  # 最初の3つをチェック
+            print(f"チャンク {i}: {len(split.page_content)}文字")
+            print(f"内容: {split.page_content[:100]}...")
+            print(f"メタデータ: {split.metadata}")
+
+        vectorstore = Chroma.from_documents(
+            documents=splits,
+            embedding=embeddings,
+            persist_directory=self.config.chroma_persist_directory,
+        )
+
+        # ベクトルストア作成後の確認
+        print("\n=== ベクトルストア作成後の確認 ===")
+        print(f"保存された文書数: {vectorstore._collection.count()}")
+
+        return vectorstore
+
+    def setup_qa_chain(self, prompt_template: str) -> None:
         """QAチェーンを設定"""
         try:
             if not self.vectorstore:
                 raise ValueError("ベクトルストアが設定されていません")
 
-            # プロンプトテンプレートを作成
             prompt = PromptTemplate(
                 template=prompt_template, input_variables=["context", "question"]
             )
 
-            # LangChain LLMを取得
-            llm = self.gemini_client.get_langchain_llm()
+            retriever = self._create_retriever()
+            llm = self.ollama_client.get_langchain_llm()
 
-            # RetrievalQAチェーンを作成
             self.qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 chain_type="stuff",
-                retriever=self.vectorstore.as_retriever(
-                    search_kwargs={"k": 3}  # 上位3つの関連文書を取得
-                ),
+                retriever=retriever,
                 return_source_documents=True,
                 chain_type_kwargs={
                     "prompt": prompt,
@@ -382,7 +762,18 @@ class LangChainRAGEngine:
             print("✓ QAチェーン設定完了")
 
         except Exception as e:
-            raise Exception(f"QAチェーン設定エラー: {e}")
+            raise Exception(f"QAチェーン設定エラー: {e}") from e
+
+    def _create_retriever(self):
+        """リトリーバーを作成"""
+        return self.vectorstore.as_retriever(
+            search_type="mmr",  # Maximum Marginal Relevance for diversity
+            search_kwargs={
+                "k": self.config.retriever_k,
+                "fetch_k": self.config.retriever_fetch_k,
+                "lambda_mult": self.config.retriever_lambda_mult,
+            },
+        )
 
     def query(self, question: str) -> Dict[str, Any]:
         """質問に対してRAG検索を実行"""
@@ -391,138 +782,200 @@ class LangChainRAGEngine:
                 raise ValueError("QAチェーンが設定されていません")
 
             result = self.qa_chain.invoke({"query": question})
-
-            return {
-                "answer": result["result"],
-                "source_documents": result["source_documents"],
-                "retrieved_context": "\n\n".join(
-                    [doc.page_content for doc in result["source_documents"]]
-                ),
-            }
+            return self._process_query_result(result)
 
         except Exception as e:
-            raise Exception(f"RAG検索エラー: {e}")
+            raise Exception(f"RAG検索エラー: {e}") from e
+
+    def _process_query_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """クエリ結果を処理"""
+        seen_sections = set()
+        retrieved_context_with_sections = []
+        unique_documents = []
+
+        print("RAG検索結果:", result)
+        print(f"取得した文書数: {len(result['source_documents'])}")
+
+        print("\n=== RAG検索で取得された全文書 ===")
+        for i, doc in enumerate(result["source_documents"]):
+            section_num = doc.metadata.get("section", 0)
+            print(f"\n--- 検索結果文書 {i} ---")
+            print(f"セクション番号: {section_num}")
+            print(f"内容長: {len(doc.page_content)} 文字")
+            print(f"メタデータ: {doc.metadata}")
+            print(f"内容:\n{doc.page_content}")
+            print("-" * 50)
+
+            # 同じセクション番号の文書は一度だけ追加
+            if section_num not in seen_sections:
+                seen_sections.add(section_num)
+
+                # 内容が空でないことを確認
+                if doc.page_content.strip():
+                    content_with_section = (
+                        f"[セクション {section_num}]\n{doc.page_content}"
+                    )
+                    retrieved_context_with_sections.append(content_with_section)
+                    unique_documents.append(doc)
+                    print(f"セクション {section_num} を追加しました")
+                else:
+                    print(f"⚠️ セクション {section_num} の内容が空です")
+
+        final_context = "\n\n".join(retrieved_context_with_sections)
+        print(f"最終的な retrieved_context 長: {len(final_context)}")
+        print(f"最終的な retrieved_context の先頭200文字: {final_context[:200]}...")
+
+        return {
+            "answer": result["result"],
+            "source_documents": unique_documents,
+            "retrieved_context": final_context,
+        }
 
 
 class HybridRAGSystem:
-    """ハイブリッドRAGシステムメインクラス（LangChain対応）"""
+    """ハイブリッドRAGシステムメインクラス（Ollama + Gemini）"""
 
-    def __init__(self):
-        self.prompt_loader = PromptLoader()
-        self.document_loader = DocumentLoader()
-        self.gemini_client = GeminiClient()
-        self.langextract_client = LangExtractClient(self.gemini_client)
+    def __init__(self, config: SystemConfig = None):
+        self.config = config or SystemConfig.from_env()
 
-        # LangChainベースのRAGエンジンを初期化
-        self.rag_engine = LangChainRAGEngine(self.gemini_client)
+        # コンポーネントを初期化
+        self.prompt_loader = PromptLoader(self.config)
+        self.document_loader = DocumentLoader(self.config)
+        self.ollama_client = OllamaClient(self.config)
+        self.gemini_client = GeminiClient(self.config)
+        self.langextract_client = LangExtractClient(self.config, self.gemini_client)
+        self.rag_engine = LangChainRAGEngine(self.config, self.ollama_client)
 
-        # 参考資料を事前読み込み（両形式）
-        self.context = (
-            self.document_loader.load_documents()
-        )  # 従来形式（LangExtract用）
-        self.documents = (
-            self.document_loader.load_documents_as_langchain()
-        )  # LangChain形式
+        # データを読み込み
+        self.context = self.document_loader.load_documents()
+        self.documents = self.document_loader.load_documents_as_langchain()
 
-        # LangChainベースのRAGを設定
-        self._setup_langchain_rag()
+        # RAGシステムを設定
+        self._setup_rag_system()
+        self._print_initialization_info()
 
-        print("✓ ハイブリッドRAGシステム初期化完了")
-        print(f"✓ Geminiモデル: {self.gemini_client.model_name}")
-        print(f"✓ 参考資料読み込み: {len(self.context)}文字")
-        print(f"✓ LangChain文書数: {len(self.documents)}個")
-
-    def _setup_langchain_rag(self):
-        """LangChainベースのRAGを設定"""
+    def _setup_rag_system(self) -> None:
+        """RAGシステムを設定"""
         try:
-            # ベクトルストアを設定
             self.rag_engine.setup_vectorstore(self.documents)
-
-            # RAG用のプロンプトテンプレートを取得
             rag_prompt_template = self.prompt_loader.get_prompt("INITIAL_ANSWER_PROMPT")
-
-            # QAチェーンを設定
             self.rag_engine.setup_qa_chain(rag_prompt_template)
-
         except Exception as e:
             print(f"⚠️ LangChain RAG設定でエラー: {e}")
             print("フォールバック: 従来の方式を使用します")
             self.rag_engine = None
+
+    def _print_initialization_info(self) -> None:
+        """初期化情報を表示"""
+        print("✓ ハイブリッドRAGシステム初期化完了")
+        print(f"✓ Ollamaモデル: {self.ollama_client.model_name}")
+        print(f"✓ Geminiモデル: {self.gemini_client.model_name}")
+        print(f"✓ 参考資料読み込み: {len(self.context)}文字")
+        print(f"✓ LangChain文書数: {len(self.documents)}個")
 
     def process_question(self, question: str) -> HybridRAGResult:
         """質問を処理してハイブリッドRAG結果を生成"""
         print("\n=== 質問処理開始 ===")
         print(f"質問: {question}")
 
-        # Step 1: RAG回答生成
+        # RAG回答生成
         print("\n1. RAG回答生成中...")
-        answer = self._generate_rag_answer(question)
+        rag_result = self._generate_rag_answer(question)
+        answer, retrieved_context = self._extract_answer_and_context(rag_result)
         print(f"✓ 回答生成完了: {len(answer)}文字")
 
-        # Step 2: キーワード抽出
-        print("\n2. キーワード抽出中...")
-        keywords = self._extract_keywords(answer)
-        print(f"✓ キーワード抽出完了: {keywords}")
-
-        # Step 3: ソース位置特定
-        print("\n3. ソース位置特定中...")
-        source_locations = self._extract_source_locations(keywords)
+        # ソース位置特定
+        print("\n2. ソース位置特定中...")
+        source_locations = self._extract_source_locations(retrieved_context)
         print(f"✓ ソース位置特定完了: {len(source_locations)}件")
 
         # 結果をまとめる
-        result = HybridRAGResult(
-            question=question,
-            answer=answer,
-            extracted_keywords=keywords,
-            source_locations=source_locations,
-            metadata={
-                "model": self.gemini_client.model_name,
-                "context_length": len(self.context),
-                "answer_length": len(answer),
-                "keyword_count": len(keywords),
-                "source_count": len(source_locations),
-            },
+        result = self._create_hybrid_rag_result(
+            question, answer, retrieved_context, source_locations
         )
 
         print("\n=== 処理完了 ===")
         return result
 
-    def _generate_rag_answer(self, question: str) -> str:
+    def _extract_answer_and_context(self, rag_result) -> tuple[str, str]:
+        """RAG結果から回答とコンテキストを抽出"""
+        if isinstance(rag_result, dict):
+            answer = rag_result["answer"]
+            retrieved_context = rag_result.get("retrieved_context", "")
+            if self.config.debug:
+                print(f"✓ 回答生成完了: {answer}")
+                print(f"✓ 検索された参考資料: {retrieved_context}")
+        else:
+            answer = rag_result
+            retrieved_context = ""
+        return answer, retrieved_context
+
+    def _create_hybrid_rag_result(
+        self,
+        question: str,
+        answer: str,
+        retrieved_context: str,
+        source_locations: List[SourceLocation],
+    ) -> HybridRAGResult:
+        """HybridRAGResultを作成"""
+        return HybridRAGResult(
+            question=question,
+            answer=answer,
+            extracted_keywords=[],  # 後方互換性のため保持
+            source_locations=source_locations,
+            metadata={
+                "rag_model": self.ollama_client.model_name,
+                "langextract_model": self.gemini_client.model_name,
+                "context_length": len(self.context),
+                "retrieved_context_length": len(retrieved_context),
+                "answer_length": len(answer),
+                "keyword_count": 0,  # 後方互換性のため保持
+                "source_count": len(source_locations),
+            },
+        )
+
+    def _generate_rag_answer(self, question: str) -> Dict[str, str]:
         """RAG回答を生成（LangChain使用）"""
         if self.rag_engine:
-            # LangChainベースのRAGを使用
             try:
                 rag_result = self.rag_engine.query(question)
-                return rag_result["answer"]
+                print("answer:", rag_result["answer"])
+                print("retrieved_context:", rag_result["retrieved_context"])
+                return {
+                    "answer": rag_result["answer"],
+                    "retrieved_context": rag_result["retrieved_context"],
+                }
             except Exception as e:
                 print(f"⚠️ LangChain RAGでエラー: {e}")
                 print("フォールバック: 従来方式を使用")
 
-        # フォールバック: 従来の方式
+        # フォールバック処理
+        return self._fallback_rag_answer(question)
+
+    def _fallback_rag_answer(self, question: str) -> Dict[str, str]:
+        """フォールバック用のRAG回答生成"""
         prompt_template = self.prompt_loader.get_prompt("INITIAL_ANSWER_PROMPT")
         prompt = prompt_template.format(context=self.context, question=question)
-        return self.gemini_client.generate_response(prompt)
+        answer = self.ollama_client.generate_response(prompt)
 
-    def _extract_keywords(self, answer: str) -> List[str]:
-        """回答からキーワードを抽出"""
-        prompt_template = self.prompt_loader.get_prompt("KEYWORD_EXTRACTION_PROMPT")
-        prompt = prompt_template.format(answer_text=answer)
+        # セクション情報を含める
+        fallback_context_with_sections = []
+        sections = self.context.split("\n\n")
+        for i, section in enumerate(sections):
+            if section.strip():
+                fallback_context_with_sections.append(
+                    f"[セクション {i}]\n{section.strip()}"
+                )
 
-        response = self.gemini_client.generate_response(prompt)
+        return {
+            "answer": answer,
+            "retrieved_context": "\n\n".join(fallback_context_with_sections),
+        }
 
-        # キーワードをパース（カンマ区切りを想定）
-        keywords = [kw.strip() for kw in response.split(",") if kw.strip()]
-        return keywords[:10]  # 最大10個のキーワードに制限
-
-    def _extract_source_locations(self, keywords: List[str]) -> List[SourceLocation]:
-        """キーワードのソース位置を特定"""
-        if not keywords:
-            return []
-
+    def _extract_source_locations(self, retrieved_context: str) -> List[SourceLocation]:
+        """RAG参考資料からソース位置を特定"""
         prompt = self.prompt_loader.get_prompt("LANGEXTRACT_SOURCE_PROMPT")
-        return self.langextract_client.extract_keyword_sources(
-            self.context, keywords, prompt
-        )
+        return self.langextract_client.extract_sources(retrieved_context, prompt)
 
 
 def main():
@@ -611,15 +1064,11 @@ def print_result(result: HybridRAGResult):
     print("\n【回答】")
     print(result.answer)
 
-    print(f"\n【抽出キーワード】({len(result.extracted_keywords)}個)")
-    for i, keyword in enumerate(result.extracted_keywords, 1):
-        print(f"  {i}. {keyword}")
-
     print(f"\n【ソース位置情報】({len(result.source_locations)}件)")
     for i, source in enumerate(result.source_locations, 1):
-        print(f"  {i}. キーワード: {source.keyword}")
+        print(f"  {i}. 抽出内容: {source.keyword}")
         print(f"     カテゴリ: {source.category}")
-        print(f'     テキスト: "{source.text}"')
+        print(f"     セクション: {source.section}")
         print(f"     位置: {source.start_char}-{source.end_char}文字目")
         print()
 
